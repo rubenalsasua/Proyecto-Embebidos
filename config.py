@@ -1,24 +1,49 @@
-# --- PINES DEL GROVE BASE HAT ---
-PIN_ANEMOMETRO = 16      # D16 (Digital)
-PIN_PLUVIOMETRO = 17     # D17 (Digital)
-PIN_LED = 18             # D18 (Digital)
-PIN_RELE = 19            # D19 (Digital)
-PIN_SERVO = 12           # PWM Port (GPIO 12 es hardware PWM en Pi)
+# --- PINES DIGITALES ---
+PIN_ANEMOMETRO = 22      # gpiozero
+PIN_PLUVIOMETRO = 5      # gpiozero
+PIN_LED = 18             # RPi.GPIO
+PIN_RELE = 24            # RPi.GPIO
+PIN_SERVO = 12           # PWM
 
-# Direccion I2C para sensores analógicos (Base Hat)
-I2C_ADDR_ADC = 0x04      
+# --- CANALES ANALÓGICOS (ADC) ---
 CANAL_VELETA = 0         # A0
-CANAL_LUZ = 1            # A1
+CANAL_LUZ = 2            # A2
 
-# --- UMBRALES DE ALERTA [cite: 2152-2155] ---
-# Umbrales de Viento (pulsos por intervalo de 5s)
-VIENTO_UMBRAL_AVISO = 5
-VIENTO_UMBRAL_EMERGENCIA = 15
+# --- PARÁMETROS ELÉCTRICOS ---
+VCC = 3.3   
+R_EXT = 10000.0
+ADC_MAX = 4095.0
 
-# Umbrales de Lluvia (pulsos por intervalo de 5s)
-LLUVIA_UMBRAL_AVISO = 1
-LLUVIA_UMBRAL_EMERGENCIA = 5
 
-# --- BASE DE DATOS Y CLOUD ---
-DB_NAME = "/home/pi/proyecto_embebidos/meteorologia.db"
-CLOUD_URL = "https://user_f73dcfa7-2c97-4200-b112-622a5836f72e-cloud.com/api/v1/datos"
+DIRECTION_MAP = [
+    (160,  "Noreste"),
+    (200,  "Norte"),
+    (310,  "Este"),
+    (620,  "Sureste"),
+    (1700, "Sur"),
+    (2020, "Oeste"),
+    (2310, "Noroeste"),
+    (2460, "Suroeste")
+]
+
+# --- FACTORES DE CONVERSIÓN ---
+FACTOR_VIENTO = 2.4      
+MM_POR_VUELCO = 0.2794   
+
+# --- UMBRALES ---
+VIENTO_UMBRAL_AVISO = 40       
+VIENTO_UMBRAL_EMERGENCIA = 70  
+LLUVIA_UMBRAL_AVISO = 2        
+LLUVIA_UMBRAL_EMERGENCIA = 10  
+
+# --- DATOS ---
+DB_LOCAL = "/home/deusto/Proyecto-Embebidos/Proyecto-Embebidos/meteorologia.db"
+MYSQL_HOST = "bbb7f5pmlzbofierkupo-mysql.services.clever-cloud.com"
+MYSQL_PORT = 3306
+MYSQL_USER = "uftt9g8twsyhyigc"
+MYSQL_PASSWORD = "MxdtVEZvjcBKdDD3dGki"
+MYSQL_DB = "bbb7f5pmlzbofierkupo"
+
+# --- FILTRADO VELETA ---
+VELETA_MUESTRAS = 7
+VELETA_DELAY_MUESTRA = 0.005

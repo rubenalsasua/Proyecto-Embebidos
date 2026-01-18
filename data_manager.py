@@ -1,71 +1,89 @@
 import sqlite3
-import requests
+import mysql.connector
 import config
 from datetime import datetime
 
 class DataManager:
     def __init__(self):
-        self.conn = sqlite3.connect(config.DB_NAME)
-        self.cursor = self.conn.cursor()
-        self.crear_tabla()
+        # Conexión Local (SQLite)
+        self.conn_local = sqlite3.connect(config.DB_LOCAL)
+        self.cursor_local = self.conn_local.cursor()
+        self.crear_tabla_local()
 
-    def crear_tabla(self):
-        self.cursor.execute('''
+    def crear_tabla_local(self):
+        self.cursor_local.execute('''
             CREATE TABLE IF NOT EXISTS mediciones (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 fecha TEXT,
                 viento INTEGER,
                 lluvia INTEGER,
                 luz INTEGER,
-                direccion INTEGER,
+                direccion TEXT,  
                 estado_sistema TEXT,
                 sincronizado INTEGER DEFAULT 0
             )
         ''')
-        self.conn.commit()
+        self.conn_local.commit()
 
     def guardar_dato(self, datos):
-        """Guarda datos en local"""
         fecha = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        self.cursor.execute('''
+        self.cursor_local.execute('''
             INSERT INTO mediciones (fecha, viento, lluvia, luz, direccion, estado_sistema)
             VALUES (?, ?, ?, ?, ?, ?)
         ''', (fecha, datos['viento'], datos['lluvia'], datos['luz'], datos['direccion'], datos['estado']))
-        self.conn.commit()
-        print(f"[DB] Dato guardado localmente: {fecha}")
+        self.conn_local.commit()
+        print(f"[LOCAL] Dato guardado: {fecha}")
 
     def sincronizar_nube(self):
-        """Sube datos no sincronizados a Clever Cloud"""
-        # Seleccionar datos no enviados (sincronizado = 0)
-        self.cursor.execute('SELECT * FROM mediciones WHERE sincronizado = 0')
-        filas = self.cursor.fetchall()
+        self.cursor_local.execute('SELECT * FROM mediciones WHERE sincronizado = 0')
+        filas = self.cursor_local.fetchall()
 
         if not filas:
-            return
+            return 
 
-        for fila in filas:
-            payload = {
-                "id": fila[0], "fecha": fila[1], "viento": fila[2],
-                "lluvia": fila[3], "luz": fila[4], "direccion": fila[5],
-                "estado": fila[6]
-            }
-            try:
-                # Envio HTTP POST
-                # response = requests.post(config.CLOUD_URL, json=payload, timeout=2)
-                # if response.status_code == 200:
+        conn_remota = None
+        try:
+            conn_remota = mysql.connector.connect(
+                host=config.MYSQL_HOST,
+                port=config.MYSQL_PORT,
+                user=config.MYSQL_USER,
+                password=config.MYSQL_PASSWORD,
+                database=config.MYSQL_DB,
+                connect_timeout=5
+            )
+            cursor_remoto = conn_remota.cursor()
+
+            cursor_remoto.execute('''
+                CREATE TABLE IF NOT EXISTS mediciones (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    fecha VARCHAR(50),
+                    viento INT,
+                    lluvia INT,
+                    luz INT,
+                    direccion VARCHAR(20),
+                    estado VARCHAR(50)
+                )
+            ''')
+
+            sql_insert = "INSERT INTO mediciones (fecha, viento, lluvia, luz, direccion, estado) VALUES (%s, %s, %s, %s, %s, %s)"
+            
+            for fila in filas:
+                # fila = (id, fecha, viento, lluvia, luz, direccion, estado, sinc)
+                val = (fila[1], fila[2], fila[3], fila[4], fila[5], fila[6])
+                cursor_remoto.execute(sql_insert, val)
                 
-                # SIMULACIÓN DE ÉXITO (Descomentar líneas de arriba con URL real)
-                print(f"[CLOUD] Dato ID {fila[0]} enviado a la nube.")
-                
-                # Marcar como enviado o borrar (según diagrama cite: 2179)
-                self.cursor.execute('UPDATE mediciones SET sincronizado = 1 WHERE id = ?', (fila[0],))
-                # Opcional: self.cursor.execute('DELETE FROM mediciones WHERE id = ?', (fila[0],))
-                
-            except Exception as e:
-                print(f"[CLOUD] Error de conexión: {e}")
-                break # Si falla uno, parar para reintentar luego
-        
-        self.conn.commit()
+                self.cursor_local.execute('UPDATE mediciones SET sincronizado = 1 WHERE id = ?', (fila[0],))
+                print(f"[NUBE] Dato ID {fila[0]} subido a MySQL.")
+
+            conn_remota.commit()
+            self.conn_local.commit()
+
+        except mysql.connector.Error as err:
+            print(f"[ERROR NUBE] MySQL Error: {err}")
+        finally:
+            if conn_remota and conn_remota.is_connected():
+                cursor_remoto.close()
+                conn_remota.close()
 
     def cerrar(self):
-        self.conn.close()
+        self.conn_local.close()

@@ -1,89 +1,129 @@
 import RPi.GPIO as GPIO
-import smbus2
+from gpiozero import Button
+from grove.adc import ADC
 import time
 import config
 
 class HardwareManager:
     def __init__(self):
+        # --- 1. CONFIGURACIÓN ACTUADORES ---
         GPIO.setmode(GPIO.BCM)
         GPIO.setwarnings(False)
         
-        # Configurar Entradas Digitales
-        GPIO.setup(config.PIN_ANEMOMETRO, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-        GPIO.setup(config.PIN_PLUVIOMETRO, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-        
-        # Configurar Salidas Digitales
         GPIO.setup(config.PIN_LED, GPIO.OUT)
         GPIO.setup(config.PIN_RELE, GPIO.OUT)
         GPIO.setup(config.PIN_SERVO, GPIO.OUT)
         
-        # Configurar PWM para Servo (50Hz estándar)
+        GPIO.output(config.PIN_LED, GPIO.LOW)
+        GPIO.output(config.PIN_RELE, GPIO.LOW)
+        
+        self.st_led = "APAGADO"
+        self.st_rele = "INACTIVO"
+        self.st_servo = "0 (Abierto)"
+        
         self.servo_pwm = GPIO.PWM(config.PIN_SERVO, 50)
         self.servo_pwm.start(0)
         
-        # Configurar I2C para Analógicos
-        self.bus = smbus2.SMBus(1)
-        
-        # Variables para contadores de interrupciones
-        self.pulsos_viento = 0
-        self.pulsos_lluvia = 0
-        
-        # Activar interrupciones (Eventos)
-        GPIO.add_event_detect(config.PIN_ANEMOMETRO, GPIO.FALLING, callback=self._contar_viento, bouncetime=50)
-        GPIO.add_event_detect(config.PIN_PLUVIOMETRO, GPIO.FALLING, callback=self._contar_lluvia, bouncetime=200)
+        # --- 2. INICIALIZAR ADC ---
+        try:
+            self.adc = ADC()
+        except Exception as e:
+            print(f"[ERROR CRÍTICO] No se detecta el HAT I2C: {e}")
+            self.adc = None
 
-    # --- Callbacks de Interrupción ---
-    def _contar_viento(self, channel):
-        self.pulsos_viento += 1
+        # --- 3. SENSORES DIGITALES ---
+        self.contador_viento = 0
+        self.ultimo_tiempo_viento = 0
+        try:
+            self.sensor_viento = Button(config.PIN_ANEMOMETRO, pull_up=True)
+            self.sensor_viento.when_pressed = self._callback_viento
+        except Exception as e:
+            print(f"[ERROR] Anemómetro: {e}")
 
-    def _contar_lluvia(self, channel):
-        self.pulsos_lluvia += 1
+        self.contador_lluvia = 0
+        try:
+            self.sensor_lluvia = Button(config.PIN_PLUVIOMETRO, pull_up=True)
+            self.sensor_lluvia.when_pressed = self._callback_lluvia
+        except Exception as e:
+            print(f"[ERROR] Pluviómetro: {e}")
 
-    # --- Lectura de Sensores ---
-    def obtener_pulsos_y_resetear(self):
-        """Devuelve los pulsos acumulados y reinicia contadores"""
-        v = self.pulsos_viento
-        l = self.pulsos_lluvia
-        self.pulsos_viento = 0
-        self.pulsos_lluvia = 0
+    # --- CALLBACKS ---
+    def _callback_viento(self):
+        ahora = time.time()
+        if (ahora - self.ultimo_tiempo_viento) > 0.015:
+            self.contador_viento += 1
+            self.ultimo_tiempo_viento = ahora
+
+    def _callback_lluvia(self):
+        self.contador_lluvia += 1
+
+    # --- LECTURA ---
+    def obtener_datos_raw(self):
+        v = self.contador_viento
+        l = self.contador_lluvia
+        self.contador_viento = 0
+        self.contador_lluvia = 0 
         return v, l
 
-    def leer_adc(self, canal):
-        """Lee valor crudo (0-4095) del Grove Base Hat via I2C"""
-        try:
-            # Comando para leer del registro del ADC en el Hat
-            self.bus.write_byte_data(config.I2C_ADDR_ADC, 0x10 | canal, 0)
-            time.sleep(0.05) # Espera conversión
-            data = self.bus.read_i2c_block_data(config.I2C_ADDR_ADC, 0x10 | canal, 2)
-            val = data[0] | (data[1] << 8) # Unir bytes
-            return val
-        except Exception as e:
-            print(f"Error I2C: {e}")
-            return 0
+    # --- VELETA ---
+    def leer_veleta_datos(self):
+        """Devuelve (nombre_direccion, resistencia_calculada)"""
+        if self.adc is None: return "Error", 0
+        
+        # 1. Leer RAW y convertir a Voltaje 
+        raw_value = self.adc.read(config.CANAL_VELETA)
+        voltage = raw_value * config.VCC / config.ADC_MAX
+        
+        # 2. Calcular Resistencia
+        if voltage >= config.VCC - 0.01:
+            r_veleta = 999999
+        elif voltage <= 0.01:
+            r_veleta = 0
+        else:
+            r_veleta = (config.R_EXT * voltage) / (config.VCC - voltage)
 
-    def leer_veleta(self):
-        val = self.leer_adc(config.CANAL_VELETA)
-        # Convertir voltaje a grados aprox (simplificado)
-        return int((val / 4095.0) * 360)
+        # 3. Buscar Dirección 
+        closest_direction = "Desconocido"
+        min_diff = 999999.0
+
+        for val, direction in config.DIRECTION_MAP:
+            diff = abs(r_veleta - val)
+            if diff < min_diff:
+                min_diff = diff
+                closest_direction = direction
+        
+        return closest_direction, int(r_veleta)
 
     def leer_luz(self):
-        return self.leer_adc(config.CANAL_LUZ)
+        if self.adc is None: return 0
+        return self.adc.read(config.CANAL_LUZ)
 
-    # --- Control de Actuadores ---
+    # --- CONTROL ---
     def controlar_servo(self, angulo):
-        # Conversión de ángulo a Duty Cycle (2.5% a 12.5%)
+        self.st_servo = f"{angulo}"
         duty = 2.5 + (angulo / 18.0)
         self.servo_pwm.ChangeDutyCycle(duty)
-        time.sleep(0.3) # Dar tiempo a moverse
-        self.servo_pwm.ChangeDutyCycle(0) # Detener vibración
+        time.sleep(0.3)
+        self.servo_pwm.ChangeDutyCycle(0)
 
-    def controlar_led(self, estado):
-        # estado: 0=Apagado, 1=Encendido, 2=Parpadeo (gestionado en main)
+    def controlar_led(self, encendido):
+        estado = GPIO.HIGH if encendido else GPIO.LOW
         GPIO.output(config.PIN_LED, estado)
+        self.st_led = "ON" if encendido else "OFF"
 
-    def controlar_rele(self, estado):
+    def controlar_rele(self, activado):
+        estado = GPIO.HIGH if activado else GPIO.LOW
         GPIO.output(config.PIN_RELE, estado)
+        self.st_rele = "ON" if activado else "OFF"
+
+    def obtener_estados(self):
+        return self.st_led, self.st_rele, self.st_servo
 
     def limpiar(self):
-        self.servo_pwm.stop()
-        GPIO.cleanup()
+        try:
+            self.servo_pwm.stop()
+            self.sensor_viento.close()
+            self.sensor_lluvia.close()
+            GPIO.cleanup()
+        except:
+            pass
