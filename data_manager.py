@@ -1,7 +1,7 @@
 import sqlite3
 import mysql.connector
 import config
-from datetime import datetime
+from datetime import datetime, timedelta
 
 class DataManager:
     def __init__(self):
@@ -39,9 +39,10 @@ class DataManager:
         filas = self.cursor_local.fetchall()
 
         if not filas:
-            return 
+            return
 
         conn_remota = None
+        cursor_remoto = None
         try:
             conn_remota = mysql.connector.connect(
                 host=config.MYSQL_HOST,
@@ -66,24 +67,56 @@ class DataManager:
             ''')
 
             sql_insert = "INSERT INTO mediciones (fecha, viento, lluvia, luz, direccion, estado) VALUES (%s, %s, %s, %s, %s, %s)"
-            
+
+            ids_subidos = []
             for fila in filas:
-                # fila = (id, fecha, viento, lluvia, luz, direccion, estado, sinc)
                 val = (fila[1], fila[2], fila[3], fila[4], fila[5], fila[6])
                 cursor_remoto.execute(sql_insert, val)
-                
-                self.cursor_local.execute('UPDATE mediciones SET sincronizado = 1 WHERE id = ?', (fila[0],))
-                print(f"[NUBE] Dato ID {fila[0]} subido a MySQL.")
+                ids_subidos.append((fila[0],))
 
             conn_remota.commit()
+
+            self.cursor_local.executemany(
+                'UPDATE mediciones SET sincronizado = 1 WHERE id = ?',
+                ids_subidos
+            )
             self.conn_local.commit()
 
+            for (id_local,) in ids_subidos:
+                print(f"[NUBE] Dato ID {id_local} subido a MySQL.")
+
+            self.borrar_local_sincronizado_antiguo()
+
         except mysql.connector.Error as err:
+            if conn_remota:
+                try:
+                    conn_remota.rollback()
+                except:
+                    pass
             print(f"[ERROR NUBE] MySQL Error: {err}")
         finally:
+            if cursor_remoto:
+                try:
+                    cursor_remoto.close()
+                except:
+                    pass
             if conn_remota and conn_remota.is_connected():
-                cursor_remoto.close()
                 conn_remota.close()
+
+    def borrar_local_sincronizado_antiguo(self, minutos=None):
+        if minutos is None:
+            minutos = getattr(config, "RETENCION_LOCAL_MINUTOS", 5)
+
+        cutoff = (datetime.now() - timedelta(minutes=minutos)).strftime("%Y-%m-%d %H:%M:%S")
+        self.cursor_local.execute(
+            "DELETE FROM mediciones WHERE sincronizado = 1 AND fecha < ?",
+            (cutoff,)
+        )
+        borrados = self.cursor_local.rowcount
+        self.conn_local.commit()
+
+        if borrados and borrados > 0:
+            print(f"[LOCAL] Borradas {borrados} filas sincronizadas anteriores a {cutoff}.")
 
     def cerrar(self):
         self.conn_local.close()
