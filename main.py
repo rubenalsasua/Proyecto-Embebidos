@@ -5,7 +5,7 @@ from data_manager import DataManager
 
 def main():
     print("\n" + "="*60)
-    print("   INICIANDO SISTEMA DE MONITORIZACION (V3.1 Veleta OK)")
+    print("   INICIANDO SISTEMA DE MONITORIZACION")
     print("="*60)
     
     try:
